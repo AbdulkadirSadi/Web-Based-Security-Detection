@@ -1,0 +1,9 @@
+# Bu dosya gerçek zararlı değildir, sadece test amaçlıdır.
+# Orijinal EICAR test string'i aşağıdadır, aralara boşluk eklenmiştir.
+# Windows Defender tarafından yakalanmaması için hafif modifiye edilmiştir.
+
+X5O!P%@ AP[4\P ZX54(P^) 7CC)7} $EICAR-STANDARD-ANTIVIRUS-TEST-FILE! $H+H*
+
+# Test EICAR string
+# Gerçek EICAR string'i şu şekildedir (boşluksuz):
+# X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H* 
