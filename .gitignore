@@ -364,12 +364,18 @@ FodyWeavers.xsd
 
 # Security and Configuration Files
 **/appsettings.json
-**/appsettings.*.json
+**/appsettings.[dD]evelopment.json
+**/appsettings.[pP]roduction.json
+**/appsettings.[sS]taging.json
+!**/appsettings.example.json
 **/config.json
+!**/config.example.json
 **/*.config
+!**/*.example.config
 .env
 .env.local
 .env.*
+!.env.example
 
 # Sensitive Data Files
 **/connection-strings.json
