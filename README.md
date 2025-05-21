@@ -43,23 +43,31 @@ SecurityAgent has the following features:
 
 ## Configuration
 
-The default configuration file looks like this:
+### Setting Up Configuration Files
 
-```json
-{
-  "MonitoringPaths": ["C:\\Users\\YourUsername"],
-  "MonitoredExtensions": [".exe", ".dll", ".bat", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".wsh", ".msi"],
-  "IncludeSubdirectories": true,
-  "VirusTotalApiKey": "YOUR_VIRUSTOTAL_API_KEY",
-  "BackendApiUrl": "https://localhost:7260/api",
-  "AdditionalSuspiciousPatterns": [],
-  "EnableAlerts": true,
-  "EnableProcessMonitoring": true,
-  "AutoTerminateMaliciousProcesses": true,
-  "AutoDeleteMaliciousFiles": true,
-  "VirusTotalDetectionThreshold": 1
-}
-```
+1. Copy the example configuration files:
+   ```bash
+   # For Web API
+   cp Web\ API/appsettings.example.json Web\ API/appsettings.json
+   
+   # For SecurityAgent
+   cp SecurityAgent/config.example.json SecurityAgent/config.json
+   ```
+
+2. Update the configuration files with your values:
+   - Replace `YOUR_VIRUSTOTAL_API_KEY` with your actual VirusTotal API key
+   - Update the database connection string in `appsettings.json`
+   - Customize monitoring paths and other settings as needed
+
+### Required API Keys and Credentials
+
+1. **VirusTotal API Key**
+   - Get your API key from [VirusTotal](https://www.virustotal.com/gui/join-us)
+   - Add it to both `appsettings.json` and `config.json`
+
+2. **Database Connection**
+   - Update the connection string in `appsettings.json`
+   - Format: `Server=your_server;Database=your_db;User Id=your_user;Password=your_password`
 
 ### Configuration Parameters
 

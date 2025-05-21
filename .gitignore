@@ -363,23 +363,19 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Security and Configuration Files
-**/appsettings.Development.json
-**/appsettings.Production.json
-**/appsettings.Staging.json
-**/appsettings.Local.json
-**/config.Development.json
-**/config.Production.json
-**/config.Local.json
+**/appsettings.json
+**/appsettings.*.json
+**/config.json
+**/*.config
 .env
 .env.local
-.env.*.local
-*.key
-*.pem
-*.pfx
-*.p12
-*.cer
-*.der
-*.crt
+.env.*
+
+# Sensitive Data Files
+**/connection-strings.json
+**/api-keys.json
+**/secrets.json
+**/credentials.json
 
 # Logs and temporary files
 **/Logs/

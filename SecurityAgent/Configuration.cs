@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Collections.Generic;
 using Newtonsoft.Json;
+using System
 
 namespace SecurityAgent
 {
@@ -32,7 +33,7 @@ namespace SecurityAgent
             MonitoringPaths = new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) },
             MonitoredExtensions = new[] { ".exe", ".dll", ".bat", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".wsh", ".msi", ".txt", ".pdf" },
             IncludeSubdirectories = true,
-            VirusTotalApiKey = "YOUR VIRUSTOTAL API KEY",
+            VirusTotalApiKey =  ConfigurationManager,
             BackendApiUrl = "http://localhost:7260/api",
             AdditionalSuspiciousPatterns = new List<string>(),
             EnableAlerts = true,

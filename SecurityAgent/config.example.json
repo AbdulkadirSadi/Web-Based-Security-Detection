@@ -1,8 +1,8 @@
 {
-  "MonitoringPaths": ["C:\\Users\\abdul"],
-  "MonitoredExtensions": [".exe", ".dll", ".bat", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".wsh", ".msi", ".txt", ".pdf"],
+  "MonitoringPaths": ["C:\\Users\\YourUsername"],
+  "MonitoredExtensions": [".exe", ".dll", ".bat", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".wsh", ".msi"],
   "IncludeSubdirectories": true,
-  "VirusTotalApiKey": "234bee6e1e1358ad4e5c66e3845ba3a3cdefcc8785d67116fe5b8e64ff523897",
+  "VirusTotalApiKey": "YOUR_VIRUSTOTAL_API_KEY",
   "BackendApiUrl": "http://localhost:7260/api",
   "AdditionalSuspiciousPatterns": [],
   "EnableAlerts": true,
