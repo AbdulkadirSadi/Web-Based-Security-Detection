@@ -16,6 +16,15 @@ namespace Web_API
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
+            // Add CORS policy to allow requests from SecurityAgent
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAll", 
+                    policy => policy.AllowAnyOrigin()
+                                   .AllowAnyMethod()
+                                   .AllowAnyHeader());
+            });
+
             var app = builder.Build();
 
             // Configure the HTTP request pipeline.
@@ -25,7 +34,11 @@ namespace Web_API
                 app.UseSwaggerUI();
             }
 
-            app.UseHttpsRedirection();
+            // Disable HTTPS redirection to allow HTTP calls from SecurityAgent
+            // app.UseHttpsRedirection();
+
+            // Enable CORS
+            app.UseCors("AllowAll");
 
             app.UseAuthorization();
 

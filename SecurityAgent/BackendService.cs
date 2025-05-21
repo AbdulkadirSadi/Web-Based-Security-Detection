@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Newtonsoft.Json;
+using System.Net.NetworkInformation;
 
 namespace SecurityAgent
 {
@@ -15,6 +16,8 @@ namespace SecurityAgent
         private readonly string _apiUrl;
         private bool _hasValidConfiguration = false;
         private bool _isConnected;
+        private readonly int _maxRetries = 3;
+        private readonly int _retryDelayMs = 2000;
 
         public bool IsConnected => _isConnected;
 
@@ -64,6 +67,9 @@ namespace SecurityAgent
                 {
                     Console.WriteLine("Warning: Could not connect to backend API");
                     Console.WriteLine($"Attempted connection to: {_apiUrl}");
+                    
+                    // Additional diagnostic information
+                    await DiagnoseConnectionIssue();
                 }
             });
         }
@@ -77,15 +83,99 @@ namespace SecurityAgent
                 {
                     return false;
                 }
-                
-                // Just check if we can reach the host
-                var request = new HttpRequestMessage(HttpMethod.Head, _apiUrl);
-                var response = await _httpClient.SendAsync(request);
-                return response.IsSuccessStatusCode;
+
+                try 
+                {
+                    // Check if host is reachable first
+                    Uri uri = new Uri(_apiUrl);
+                    string host = uri.Host;
+                    
+                    // If localhost, check if port is open
+                    if (host == "localhost" || host == "127.0.0.1")
+                    {
+                        Console.WriteLine($"Checking if localhost port {uri.Port} is open...");
+                    }
+                    
+                    // Use a GET request instead of HEAD since we have a proper endpoint now
+                    var response = await _httpClient.GetAsync(_apiUrl);
+                    
+                    Console.WriteLine($"Backend connection check status: {response.StatusCode}");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        // Additional verification: try to access configuration endpoint
+                        var configEndpoint = _apiUrl + "/configuration";
+                        var configResponse = await _httpClient.GetAsync(configEndpoint);
+                        if (configResponse.IsSuccessStatusCode)
+                        {
+                            Console.WriteLine("Successfully connected to API and verified configuration endpoint");
+                            // Both endpoints succeeded, we're good to go
+                            return true;
+                        }
+                        Console.WriteLine($"Warning: Main API endpoint OK but configuration endpoint returned {configResponse.StatusCode}");
+                        // Even if configuration endpoint fails, we consider the API connected if the main endpoint works
+                        return true;
+                    }
+                    return false;
+                }
+                catch (HttpRequestException httpEx)
+                {
+                    Console.WriteLine($"HTTP request error during connection check: {httpEx.Message}");
+                    return false;
+                }
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"Unexpected error during connection check: {ex.Message}");
                 return false;
+            }
+        }
+
+        private async Task DiagnoseConnectionIssue()
+        {
+            try
+            {
+                Uri uri = new Uri(_apiUrl);
+                string host = uri.Host;
+                int port = uri.Port;
+
+                // Check if we can ping the host
+                if (host == "localhost" || host == "127.0.0.1")
+                {
+                    Console.WriteLine("Checking local network services...");
+                    Console.WriteLine("Is Web API project running? Make sure it's started in Visual Studio.");
+                    
+                    // Try to connect to the specific endpoint with more details
+                    try
+                    {
+                        var configEndpoint = _apiUrl.TrimEnd('/') + "/configuration";
+                        Console.WriteLine($"Trying to access configuration endpoint: {configEndpoint}");
+                        var response = await _httpClient.GetAsync(configEndpoint);
+                        Console.WriteLine($"Response from configuration endpoint: {response.StatusCode}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to access configuration endpoint: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    // For remote hosts, try ping
+                    try
+                    {
+                        Console.WriteLine($"Attempting to ping {host}...");
+                        Ping ping = new Ping();
+                        PingReply reply = await ping.SendPingAsync(host);
+                        Console.WriteLine($"Ping result: {reply.Status}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ping failed: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error while diagnosing connection: {ex.Message}");
             }
         }
 
@@ -100,26 +190,85 @@ namespace SecurityAgent
                     return false;
                 }
 
-                var json = JsonConvert.SerializeObject(scanResult);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync(_apiUrl + "/scanresults", content);
+                // Check connection if not already known to be connected
+                if (!_isConnected)
+                {
+                    _isConnected = await CheckConnection();
+                    if (!_isConnected)
+                    {
+                        Console.WriteLine("Cannot send scan result: Not connected to backend API");
+                        LogResultLocally(scanResult);
+                        return false;
+                    }
+                }
+
+                // Retry logic for network issues
+                for (int retry = 0; retry < _maxRetries; retry++)
+                {
+                    try
+                    {
+                        var json = JsonConvert.SerializeObject(scanResult);
+                        var content = new StringContent(json, Encoding.UTF8, "application/json");
+                        
+                        // Build the full URL with proper path combining
+                        string scanResultsEndpoint = _apiUrl.TrimEnd('/') + "/scanresults";
+                        
+                        // Reduced logging - only show endpoint without request content
+                        Console.WriteLine($"Sending scan result to backend API...");
+                        
+                        var response = await _httpClient.PostAsync(scanResultsEndpoint, content);
+                        
+                        _isConnected = response.IsSuccessStatusCode;
+                        if (response.IsSuccessStatusCode)
+                        {
+                            // Minimize response logging
+                            Console.WriteLine("Scan result sent to backend API successfully.");
+                            return true;
+                        }
+                        else
+                        {
+                            string errorContent = await response.Content.ReadAsStringAsync();
+                            Console.WriteLine($"API Error: {response.StatusCode} - {errorContent.Substring(0, Math.Min(errorContent.Length, 100))}");
+                            
+                            // If it's a server error, retry
+                            if ((int)response.StatusCode >= 500)
+                            {
+                                Console.WriteLine($"Server error, retrying... Attempt {retry+1} of {_maxRetries}");
+                                await Task.Delay(_retryDelayMs);
+                                continue;
+                            }
+                            
+                            // Bad request or other client error, don't retry
+                            LogResultLocally(scanResult);
+                            return false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Attempt {retry+1} failed: {ex.Message}");
+                        
+                        if (retry < _maxRetries - 1)
+                        {
+                            await Task.Delay(_retryDelayMs);
+                            continue;
+                        }
+                        
+                        _isConnected = false;
+                        Console.WriteLine($"Error sending results to backend after {_maxRetries} attempts: {ex.Message}");
+                        LogResultLocally(scanResult);
+                        return false;
+                    }
+                }
                 
-                _isConnected = response.IsSuccessStatusCode;
-                if (response.IsSuccessStatusCode)
-                {
-                    return true;
-                }
-                else
-                {
-                    // Log locally as fallback
-                    LogResultLocally(scanResult);
-                    return false;
-                }
+                // All retries failed
+                _isConnected = false;
+                LogResultLocally(scanResult);
+                return false;
             }
             catch (Exception ex)
             {
                 _isConnected = false;
-                Console.WriteLine($"Error sending results to backend: {ex.Message}");
+                Console.WriteLine($"Unexpected error sending results to backend: {ex.Message}");
                 LogResultLocally(scanResult);
                 return false;
             }

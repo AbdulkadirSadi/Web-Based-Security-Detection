@@ -22,6 +22,28 @@ namespace SecurityAgent
         private static bool _isRunning = true;
         private static string _lastMaliciousFile = null;
         private static string _lastDetectionInfo = null;
+        private static readonly object _consoleLock = new object(); // Console output synchronization
+
+        // Write to console with synchronization
+        public static void WriteLine(string message)
+        {
+            lock (_consoleLock)
+            {
+                Console.WriteLine(message);
+            }
+        }
+
+        // Write to console with color and synchronization
+        public static void WriteLine(string message, ConsoleColor color)
+        {
+            lock (_consoleLock)
+            {
+                ConsoleColor prevColor = Console.ForegroundColor;
+                Console.ForegroundColor = color;
+                Console.WriteLine(message);
+                Console.ForegroundColor = prevColor;
+            }
+        }
 
         public static async Task Main(string[] args)
         {
@@ -77,106 +99,135 @@ namespace SecurityAgent
             
             while (_isRunning)
             {
-                Console.Write("> ");
+                // Show prompt on its own thread to ensure it's visible
+                lock (_consoleLock)
+                {
+                    // Make the prompt clearly visible
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.Write("\n> ");
+                    Console.ResetColor();
+                    
+                    // Flush to ensure prompt appears immediately
+                    Console.Out.Flush();
+                }
+                
+                // Read command input
                 string command = Console.ReadLine()?.Trim().ToLower() ?? "";
                 
-                switch (command)
+                // Skip empty commands
+                if (string.IsNullOrWhiteSpace(command))
                 {
-                    case "help":
-                        DisplayHelp();
-                        break;
-                        
-                    case "exit":
-                    case "quit":
-                        _isRunning = false;
-                        Console.WriteLine("Exiting...");
-                        break;
-                        
-                    case "status":
-                        DisplayStatus();
-                        break;
-                        
-                    case "alert":
-                        ToggleAlerts();
-                        break;
-                        
-                    case "monitor":
-                        DisplayMonitoredDirectories();
-                        break;
-                        
-                    case "add":
-                        Console.Write("Enter directory path to monitor: ");
-                        var dir = Console.ReadLine();
-                        AddMonitoringDirectory(dir);
-                        break;
-                        
-                    case "remove":
-                        Console.Write("Enter directory path to stop monitoring: ");
-                        var removeDir = Console.ReadLine();
-                        RemoveMonitoringDirectory(removeDir);
-                        break;
-                        
-                    case "save":
-                        SaveConfiguration();
-                        break;
-                        
-                    case "process":
-                        ToggleProcessMonitoring();
-                        break;
-                        
-                    case "config":
-                        DisplayConfiguration();
-                        break;
-
-                    case "scan":
-                        Console.Write("Enter file path to scan: ");
-                        var filePath = Console.ReadLine();
-                        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-                        {
-                            Task.Run(() => AnalyzeFile(filePath));
-                        }
-                        else
-                        {
-                            Console.WriteLine("Invalid file path");
-                        }
-                        break;
-                        
-                    case "delete":
-                        HandleDeleteMaliciousFile();
-                        break;
-                        
-                    case "quarantine":
-                        HandleQuarantineMaliciousFile();
-                        break;
-
-                    case "logs":
-                        DisplayRecentLogs();
-                        break;
-                        
-                    case "qlist":
-                        DisplayQuarantinedFiles();
-                        break;
-                        
-                    case "restore":
-                        HandleRestoreFromQuarantine();
-                        break;
-                        
-                    case "qstats":
-                        DisplayQuarantineStats();
-                        break;
-                        
-                    case "qclean":
-                        CleanupQuarantine();
-                        break;
-                        
-                    case "detailed":
-                        DisplayDetailedLogs();
-                        break;
-                        
-                    default:
-                        Console.WriteLine("Unknown command. Type 'help' for available commands.");
-                        break;
+                    continue;
                 }
+                
+                // Process command
+                ProcessCommand(command);
+            }
+        }
+
+        private static void ProcessCommand(string command)
+        {
+            switch (command)
+            {
+                case "help":
+                    DisplayHelp();
+                    break;
+                    
+                case "exit":
+                case "quit":
+                    _isRunning = false;
+                    Console.WriteLine("Exiting...");
+                    break;
+                    
+                case "status":
+                    DisplayStatus();
+                    break;
+                    
+                case "alert":
+                    ToggleAlerts();
+                    break;
+                    
+                case "monitor":
+                    DisplayMonitoredDirectories();
+                    break;
+                    
+                case "add":
+                    Console.Write("Enter directory path to monitor: ");
+                    var dir = Console.ReadLine();
+                    AddMonitoringDirectory(dir);
+                    break;
+                    
+                case "remove":
+                    Console.Write("Enter directory path to stop monitoring: ");
+                    var removeDir = Console.ReadLine();
+                    RemoveMonitoringDirectory(removeDir);
+                    break;
+                    
+                case "save":
+                    SaveConfiguration();
+                    break;
+                    
+                case "process":
+                    ToggleProcessMonitoring();
+                    break;
+                    
+                case "config":
+                    DisplayConfiguration();
+                    break;
+
+                case "scan":
+                    Console.Write("Enter file path to scan: ");
+                    var filePath = Console.ReadLine();
+                    if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                    {
+                        Task.Run(() => AnalyzeFile(filePath));
+                    }
+                    else
+                    {
+                        Console.WriteLine("Invalid file path");
+                    }
+                    break;
+                    
+                case "delete":
+                    HandleDeleteMaliciousFile();
+                    break;
+                    
+                case "quarantine":
+                    HandleQuarantineMaliciousFile();
+                    break;
+
+                case "logs":
+                    DisplayRecentLogs();
+                    break;
+                    
+                case "qlist":
+                    DisplayQuarantinedFiles();
+                    break;
+                    
+                case "restore":
+                    HandleRestoreFromQuarantine();
+                    break;
+                    
+                case "qstats":
+                    DisplayQuarantineStats();
+                    break;
+                    
+                case "qclean":
+                    CleanupQuarantine();
+                    break;
+                    
+                case "detailed":
+                    DisplayDetailedLogs();
+                    break;
+                    
+                case "clear":
+                    Console.Clear();
+                    Console.WriteLine("Type 'help' for available commands");
+                    break;
+                    
+                default:
+                    Console.WriteLine("Unknown command. Type 'help' for available commands.");
+                    break;
             }
         }
 
