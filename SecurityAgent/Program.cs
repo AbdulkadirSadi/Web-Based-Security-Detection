@@ -71,7 +71,14 @@ namespace SecurityAgent
             // Set alert mode based on configuration
             NotificationService.AlertsEnabled = _config.EnableAlerts;
             
-            // Start a command processing thread
+            // Check if command line arguments are provided
+            if (args.Length > 0)
+            {
+                await ProcessCommandLineArguments(args);
+                return; // Exit after processing command line arguments
+            }
+            
+            // Start a command processing thread for interactive mode
             var commandThread = new Thread(ProcessCommands);
             commandThread.IsBackground = true;
             commandThread.Start();
@@ -92,7 +99,131 @@ namespace SecurityAgent
                 _processMonitor.Stop();
             }
         }
-
+        
+        private static async Task ProcessCommandLineArguments(string[] args)
+        {
+            if (args.Length == 0) return;
+            
+            string command = args[0].ToLower();
+            if (command.StartsWith("--"))
+            {
+                command = command.Substring(2); // Remove leading --
+            }
+            else if (command.StartsWith("-"))
+            {
+                command = command.Substring(1); // Remove leading -
+            }
+            
+            string parameter = args.Length > 1 ? args[1] : "";
+            
+            switch (command)
+            {
+                case "help":
+                    DisplayHelp();
+                    break;
+                    
+                case "scan":
+                    if (!string.IsNullOrEmpty(parameter) && File.Exists(parameter))
+                    {
+                        Console.WriteLine($"Scanning file: {parameter}");
+                        await AnalyzeFile(parameter);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Invalid file path or file does not exist.");
+                        Console.WriteLine("Usage: SecurityAgent --scan <file_path>");
+                    }
+                    break;
+                    
+                case "status":
+                    DisplayStatus();
+                    break;
+                    
+                case "alert":
+                    ToggleAlerts();
+                    break;
+                    
+                case "monitor":
+                    DisplayMonitoredDirectories();
+                    break;
+                    
+                case "add":
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        AddMonitoringDirectory(parameter);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Missing directory path.");
+                        Console.WriteLine("Usage: SecurityAgent --add <directory_path>");
+                    }
+                    break;
+                    
+                case "remove":
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        RemoveMonitoringDirectory(parameter);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Missing directory path.");
+                        Console.WriteLine("Usage: SecurityAgent --remove <directory_path>");
+                    }
+                    break;
+                    
+                case "save":
+                    SaveConfiguration();
+                    break;
+                    
+                case "process":
+                    ToggleProcessMonitoring();
+                    break;
+                    
+                case "config":
+                    DisplayConfiguration();
+                    break;
+                
+                case "logs":
+                    DisplayRecentLogs();
+                    break;
+                    
+                case "qlist":
+                    DisplayQuarantinedFiles();
+                    break;
+                    
+                case "qstats":
+                    DisplayQuarantineStats();
+                    break;
+                    
+                case "restore":
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        QuarantineManager.RestoreFile(parameter);
+                        Console.WriteLine($"Restored file: {parameter}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Missing file ID.");
+                        Console.WriteLine("Usage: SecurityAgent --restore <file_id>");
+                        DisplayQuarantinedFiles();
+                    }
+                    break;
+                    
+                case "qclean":
+                    CleanupQuarantine();
+                    break;
+                    
+                case "detailed":
+                    DisplayDetailedLogs();
+                    break;
+                    
+                default:
+                    Console.WriteLine($"Unknown command: {command}");
+                    DisplayHelp();
+                    break;
+            }
+        }
+        
         private static void ProcessCommands()
         {
             Console.WriteLine("Type 'help' to see available commands");
@@ -110,22 +241,60 @@ namespace SecurityAgent
                     // Flush to ensure prompt appears immediately
                     Console.Out.Flush();
                 }
+
+                // Kullanıcı girişini al
+                string commandLine = "";
                 
-                // Read command input
-                string command = Console.ReadLine()?.Trim().ToLower() ?? "";
+                // Özel bir okuma rutini ile kullanıcı girişini koruyarak al
+                lock (_consoleLock)
+                {
+                    var keyList = new List<ConsoleKeyInfo>();
+                    ConsoleKeyInfo key;
+                    do
+                    {
+                        key = Console.ReadKey(true); // Tuş basışını ekranda gösterme
+                        
+                        if (key.Key == ConsoleKey.Backspace)
+                        {
+                            if (keyList.Count > 0)
+                            {
+                                keyList.RemoveAt(keyList.Count - 1);
+                                Console.Write("\b \b"); // Karakteri silmek için geri git, boşluk yaz, tekrar geri git
+                            }
+                        }
+                        else if (key.Key == ConsoleKey.Enter)
+                        {
+                            Console.WriteLine(); // Yeni satıra geç
+                        }
+                        else if (!char.IsControl(key.KeyChar))
+                        {
+                            keyList.Add(key);
+                            Console.Write(key.KeyChar); // Karakteri ekrana yaz
+                        }
+                        
+                    } while (key.Key != ConsoleKey.Enter);
+                    
+                    // Girişi string'e dönüştür
+                    commandLine = new string(keyList.Select(k => k.KeyChar).ToArray()).Trim();
+                }
                 
                 // Skip empty commands
-                if (string.IsNullOrWhiteSpace(command))
+                if (string.IsNullOrWhiteSpace(commandLine))
                 {
                     continue;
                 }
                 
+                // Parse command and parameters
+                string[] parts = commandLine.Split(' ', 2);
+                string command = parts[0].ToLower();
+                string parameter = parts.Length > 1 ? parts[1] : "";
+
                 // Process command
-                ProcessCommand(command);
+                ProcessCommand(command, parameter);
             }
         }
 
-        private static void ProcessCommand(string command)
+        private static void ProcessCommand(string command, string parameter = "")
         {
             switch (command)
             {
@@ -152,15 +321,29 @@ namespace SecurityAgent
                     break;
                     
                 case "add":
-                    Console.Write("Enter directory path to monitor: ");
-                    var dir = Console.ReadLine();
-                    AddMonitoringDirectory(dir);
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        AddMonitoringDirectory(parameter);
+                    }
+                    else
+                    {
+                        Console.Write("Enter directory path to monitor: ");
+                        string dir = Console.ReadLine();
+                        AddMonitoringDirectory(dir);
+                    }
                     break;
                     
                 case "remove":
-                    Console.Write("Enter directory path to stop monitoring: ");
-                    var removeDir = Console.ReadLine();
-                    RemoveMonitoringDirectory(removeDir);
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        RemoveMonitoringDirectory(parameter);
+                    }
+                    else
+                    {
+                        Console.Write("Enter directory path to stop monitoring: ");
+                        string removeDir = Console.ReadLine();
+                        RemoveMonitoringDirectory(removeDir);
+                    }
                     break;
                     
                 case "save":
@@ -176,15 +359,22 @@ namespace SecurityAgent
                     break;
 
                 case "scan":
-                    Console.Write("Enter file path to scan: ");
-                    var filePath = Console.ReadLine();
-                    if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                    if (!string.IsNullOrEmpty(parameter) && File.Exists(parameter))
                     {
-                        Task.Run(() => AnalyzeFile(filePath));
+                        Task.Run(() => AnalyzeFile(parameter));
                     }
                     else
                     {
-                        Console.WriteLine("Invalid file path");
+                        Console.Write("Enter file path to scan: ");
+                        string filePath = Console.ReadLine();
+                        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                        {
+                            Task.Run(() => AnalyzeFile(filePath));
+                        }
+                        else
+                        {
+                            Console.WriteLine("Invalid file path");
+                        }
                     }
                     break;
                     
@@ -205,7 +395,15 @@ namespace SecurityAgent
                     break;
                     
                 case "restore":
-                    HandleRestoreFromQuarantine();
+                    if (!string.IsNullOrEmpty(parameter))
+                    {
+                        QuarantineManager.RestoreFile(parameter);
+                        Console.WriteLine($"Restored file: {parameter}");
+                    }
+                    else
+                    {
+                        HandleRestoreFromQuarantine();
+                    }
                     break;
                     
                 case "qstats":
@@ -253,6 +451,22 @@ namespace SecurityAgent
             Console.WriteLine("  qclean     - Clean up old quarantined files");
             Console.WriteLine("  detailed   - Show detailed scan logs");
             Console.WriteLine("  exit/quit  - Exit the application");
+            Console.WriteLine();
+            
+            Console.WriteLine("Command-line usage:");
+            Console.WriteLine("  SecurityAgent --help                    - Display help information");
+            Console.WriteLine("  SecurityAgent --scan <file_path>        - Scan a specific file");
+            Console.WriteLine("  SecurityAgent --add <directory_path>    - Add a directory to monitor");
+            Console.WriteLine("  SecurityAgent --remove <directory_path> - Remove a monitored directory");
+            Console.WriteLine("  SecurityAgent --monitor                 - List monitored directories");
+            Console.WriteLine("  SecurityAgent --status                  - Display agent status");
+            Console.WriteLine("  SecurityAgent --config                  - Show current configuration");
+            Console.WriteLine("  SecurityAgent --logs                    - Display recent logs");
+            Console.WriteLine("  SecurityAgent --detailed                - Display detailed logs");
+            Console.WriteLine("  SecurityAgent --qlist                   - List quarantined files");
+            Console.WriteLine("  SecurityAgent --qstats                  - Show quarantine statistics");
+            Console.WriteLine("  SecurityAgent --qclean                  - Clean old quarantine files");
+            Console.WriteLine("  SecurityAgent --restore <file_id>       - Restore file from quarantine");
             Console.WriteLine();
         }
 

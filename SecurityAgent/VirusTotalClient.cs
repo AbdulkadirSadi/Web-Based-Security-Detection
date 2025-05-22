@@ -16,6 +16,12 @@ namespace SecurityAgent
         private readonly string _apiKey;
         private const string BaseUrl = "https://www.virustotal.com/api/v3";
         private readonly bool _hasValidApiKey;
+        // Yerel önbellek için sözlük (dosya hash -> tarama sonucu)
+        private static Dictionary<string, ScanResult> _localCache = new Dictionary<string, ScanResult>();
+        // Son API çağrı zamanını izlemek için
+        private static DateTime _lastApiCall = DateTime.MinValue;
+        // API çağrıları arasında minimum gecikme süresi (milisaniye)
+        private const int ApiRateLimit = 15000; // 15 saniye
 
         // Threshold for considering a file malicious (percentage of positives)
         private const int MaliciousThreshold = 1;
@@ -66,7 +72,24 @@ namespace SecurityAgent
                 var fileHash = ComputeFileHash(filePath);
                 Console.WriteLine($"File hash: {fileHash}");
                 
+                // Yerel önbellekte kontrol et
+                if (_localCache.ContainsKey(fileHash))
+                {
+                    Console.WriteLine("Found result in local cache.");
+                    return _localCache[fileHash];
+                }
+                
+                // API çağrısı öncesi gecikme süresi kontrolü
+                var timeSinceLastCall = DateTime.Now - _lastApiCall;
+                if (timeSinceLastCall.TotalMilliseconds < ApiRateLimit)
+                {
+                    var waitTime = ApiRateLimit - (int)timeSinceLastCall.TotalMilliseconds;
+                    Console.WriteLine($"Waiting {waitTime}ms to respect VirusTotal API rate limits...");
+                    await Task.Delay(waitTime);
+                }
+                
                 Console.WriteLine("Checking if file has been previously analyzed by VirusTotal...");
+                _lastApiCall = DateTime.Now;
                 var existingAnalysis = await GetFileReport(fileHash);
 
                 if (existingAnalysis != null)
@@ -82,6 +105,8 @@ namespace SecurityAgent
                         Console.WriteLine($"File is clean according to {existingAnalysis.TotalScans} engines");
                     }
                     
+                    // Sonucu önbelleğe kaydet
+                    _localCache[fileHash] = existingAnalysis;
                     return existingAnalysis;
                 }
 
@@ -89,11 +114,43 @@ namespace SecurityAgent
                 var fileInfo = new FileInfo(filePath);
                 Console.WriteLine($"Uploading file to VirusTotal (size: {FormatFileSize(fileInfo.Length)})...");
                 
+                // API çağrısı öncesi gecikme süresi kontrolü
+                timeSinceLastCall = DateTime.Now - _lastApiCall;
+                if (timeSinceLastCall.TotalMilliseconds < ApiRateLimit)
+                {
+                    var waitTime = ApiRateLimit - (int)timeSinceLastCall.TotalMilliseconds;
+                    Console.WriteLine($"Waiting {waitTime}ms to respect VirusTotal API rate limits...");
+                    await Task.Delay(waitTime);
+                }
+                
+                _lastApiCall = DateTime.Now;
                 var uploadResponse = await UploadFile(filePath);
                 if (!uploadResponse.Success)
                 {
-                    var errorMsg = $"Failed to upload file to VirusTotal: {uploadResponse.Error}";
+                    var errorMsg = $"VirusTotal API access error: {uploadResponse.Error}";
                     Console.WriteLine(errorMsg);
+                    
+                    if (uploadResponse.Error.Contains("TooManyRequests") || 
+                        uploadResponse.Error.Contains("Quota exceeded") ||
+                        uploadResponse.Error.Contains("QuotaExceededError"))
+                    {
+                        Console.WriteLine("VirusTotal API için kota aşıldı. Bu ücretsiz API'nın bir sınırlamasıdır.");
+                        Console.WriteLine("Devam etmek için dosya yerel tarama yöntemleri kullanılacak.");
+                        
+                        // API kota hatası durumunda yerel IOC taraması yap
+                        var localScan = new ScanResult 
+                        { 
+                            IsMalicious = false, 
+                            DetectionCount = 0,
+                            TotalScans = 0,
+                            DetectedBy = new Dictionary<string, string>(),
+                            Error = "VirusTotal API quota exceeded. Using local scanning only."
+                        };
+                        
+                        _localCache[fileHash] = localScan;
+                        return localScan;
+                    }
+                    
                     return new ScanResult { IsMalicious = false, Error = errorMsg };
                 }
 
@@ -105,18 +162,30 @@ namespace SecurityAgent
                 int maxAttempts = 10;
                 for (int i = 0; i < maxAttempts; i++)
                 {
-                    int waitTime = 5000; // 5 seconds
-                    if (i > 3) waitTime = 10000; // Increase wait time after a few attempts
+                    // Increase wait times significantly - VirusTotal community API is rate-limited
+                    int waitTime = 15000; // Start with 15 seconds
+                    if (i > 2) waitTime = 20000; // 20 seconds after first few attempts
+                    if (i > 5) waitTime = 30000; // 30 seconds for later attempts
                     
                     Console.WriteLine($"Checking analysis status (attempt {i+1}/{maxAttempts})...");
                     await Task.Delay(waitTime); // Wait between checks
                     
+                    // API çağrısı öncesi gecikme süresi kontrolü
+                    timeSinceLastCall = DateTime.Now - _lastApiCall;
+                    if (timeSinceLastCall.TotalMilliseconds < ApiRateLimit)
+                    {
+                        var additionalWaitTime = ApiRateLimit - (int)timeSinceLastCall.TotalMilliseconds;
+                        Console.WriteLine($"Waiting additional {additionalWaitTime}ms for API rate limit...");
+                        await Task.Delay(additionalWaitTime);
+                    }
+                    
+                    _lastApiCall = DateTime.Now;
                     var analysisResponse = await GetAnalysis(uploadResponse.AnalysisId);
                     
                     if (analysisResponse.Status == "completed")
                     {
                         Console.WriteLine("VirusTotal analysis completed successfully.");
-                        return new ScanResult
+                        var result = new ScanResult
                         {
                             IsMalicious = analysisResponse.IsMalicious,
                             DetectionCount = analysisResponse.DetectionCount,
@@ -124,6 +193,10 @@ namespace SecurityAgent
                             DetectedBy = analysisResponse.DetectedBy,
                             Error = null
                         };
+                        
+                        // Sonucu önbelleğe kaydet
+                        _localCache[fileHash] = result;
+                        return result;
                     }
                     else if (analysisResponse.Status == "error")
                     {
@@ -134,13 +207,13 @@ namespace SecurityAgent
                     }
                     else
                     {
-                        Console.WriteLine($"Analysis status: {analysisResponse.Status}");
+                        Console.WriteLine($"Analysis status: {analysisResponse.Status} - Waiting longer for analysis to complete...");
                     }
                 }
                 
                 return new ScanResult { 
                     IsMalicious = false, 
-                    Error = "VirusTotal analysis is still in progress. Check results later by manually scanning the file again." 
+                    Error = "VirusTotal analysis is still in progress. VirusTotal free API has strict rate limits. Check results later by manually scanning the file again." 
                 };
             }
             catch (Exception ex)

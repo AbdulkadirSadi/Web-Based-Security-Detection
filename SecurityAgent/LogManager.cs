@@ -29,6 +29,8 @@ namespace SecurityAgent
             public List<string> DetectedThreats { get; set; }
             public Dictionary<string, string> ScannerResults { get; set; }
             public string Action { get; set; }
+            public string DetectedBy { get; set; }
+            public string DetectedPatterns { get; set; }
         }
 
         public static void Initialize()
@@ -72,50 +74,100 @@ namespace SecurityAgent
 
         public static void LogScanResult(string filePath, bool isMalicious, int detectionCount, int totalScans, string detectionDetails)
         {
-            // Update statistics
-            string status = isMalicious ? "MALICIOUS" : "CLEAN";
-            if (!ScanStatistics.ContainsKey(status))
-                ScanStatistics[status] = 0;
-            ScanStatistics[status]++;
-            SaveStatistics();
-
-            // Create detailed log entry
-            var detailedResult = new DetailedScanResult
+            try
             {
-                FilePath = filePath,
-                ScanTime = DateTime.Now,
-                IsMalicious = isMalicious,
-                DetectionCount = detectionCount,
-                TotalScans = totalScans,
-                FileHash = CalculateFileHash(filePath),
-                FileSize = new FileInfo(filePath).Length,
-                FileType = Path.GetExtension(filePath),
-                DetectedThreats = ParseDetectionDetails(detectionDetails),
-                ScannerResults = ParseScannerResults(detectionDetails),
-                Action = "Scan Completed"
-            };
-
-            // Save detailed JSON log
-            SaveDetailedLog(detailedResult);
-
-            // Save traditional log
-            var logEntry = new StringBuilder();
-            logEntry.AppendLine($"=== Scan Result: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
-            logEntry.AppendLine($"File: {filePath}");
-            logEntry.AppendLine($"Status: {status}");
-            logEntry.AppendLine($"Detections: {detectionCount}/{totalScans}");
-            logEntry.AppendLine($"File Size: {FormatFileSize(detailedResult.FileSize)}");
-            logEntry.AppendLine($"File Hash: {detailedResult.FileHash}");
-            
-            if (!string.IsNullOrEmpty(detectionDetails))
-            {
-                logEntry.AppendLine("Detection Details:");
-                logEntry.AppendLine(detectionDetails);
+                string status = isMalicious ? "MALICIOUS" : "CLEAN";
+                
+                // ML metrikleri hesapla
+                var fileAnalyzer = new Services.FileAnalyzer();
+                var scanResult = fileAnalyzer.AnalyzeFile(filePath);
+                
+                // Tarama sonucunu güncelle
+                scanResult.IsMalicious = isMalicious;
+                scanResult.VirusTotalDetectionCount = detectionCount;
+                scanResult.VirusTotalTotalScans = totalScans;
+                
+                // Tespit detaylarını analiz et ve kaydet
+                string detectedBy = "";
+                string detectedPatterns = "";
+                
+                if (isMalicious)
+                {
+                    // Basit bir analiz - VirusTotal ya da IOC taramasında tespit edilip edilmediğini kontrol et
+                    if (detectionDetails.Contains("VirusTotal"))
+                    {
+                        detectedBy = "VirusTotal";
+                        
+                        // Tespit desenlerini çıkar
+                        var patterns = new List<string>();
+                        var detectionLines = detectionDetails.Split('\n');
+                        foreach (var line in detectionLines)
+                        {
+                            if (line.Contains(":") && !line.Contains("API") && !line.Contains("URL"))
+                            {
+                                patterns.Add(line.Trim());
+                            }
+                        }
+                        
+                        detectedPatterns = string.Join(", ", patterns);
+                    }
+                    else if (detectionDetails.Contains("IOC"))
+                    {
+                        detectedBy = "IOC Scanner";
+                        detectedPatterns = detectionDetails;
+                    }
+                    else
+                    {
+                        detectedBy = "Security Agent";
+                        detectedPatterns = detectionDetails;
+                    }
+                }
+                
+                scanResult.DetectedBy = detectedBy;
+                scanResult.DetectedPatterns = detectedPatterns;
+                
+                // Tarama sonucunu veritabanına kaydet
+                try
+                {
+                    using (var dbContext = new ScanResultsContext())
+                    {
+                        Console.WriteLine($"Veritabanına kaydediliyor: {scanResult.FileName} (ID: {scanResult.Id})");
+                        dbContext.ScanResults.Add(scanResult);
+                        var entriesWritten = dbContext.SaveChanges();
+                        Console.WriteLine($"Veritabanına başarıyla kaydedildi: {entriesWritten} kayıt");
+                    }
+                }
+                catch (Exception dbEx)
+                {
+                    Console.WriteLine($"Veritabanı hatası: {dbEx.Message}");
+                    // İç içe exception'ları kontrol et
+                    var innerEx = dbEx.InnerException;
+                    while (innerEx != null)
+                    {
+                        Console.WriteLine($"İç hata: {innerEx.Message}");
+                        innerEx = innerEx.InnerException;
+                    }
+                    
+                    // Hata loguna kaydet
+                    File.AppendAllText(
+                        Path.Combine(AppContext.BaseDirectory, "Logs", "db_error_log.txt"),
+                        $"{DateTime.Now}: Database Error - {dbEx.Message}\n{dbEx.StackTrace}\n"
+                    );
+                }
+                
+                // Dosya yolu, durum ve tespit detaylarını loglama
+                File.AppendAllText(
+                    Path.Combine(AppContext.BaseDirectory, "Logs", "scan_results.log"),
+                    $"{DateTime.Now}: {filePath} - {status} - {detectedBy} - {detectionDetails}\n"
+                );
             }
-            
-            logEntry.AppendLine("=====================================");
-            
-            File.AppendAllText(ScanLogFile, logEntry.ToString());
+            catch (Exception ex)
+            {
+                File.AppendAllText(
+                    Path.Combine(AppContext.BaseDirectory, "Logs", "error_log.txt"),
+                    $"{DateTime.Now}: Log Error - {ex.Message}\n{ex.StackTrace}\n"
+                );
+            }
         }
 
         private static string CalculateFileHash(string filePath)
