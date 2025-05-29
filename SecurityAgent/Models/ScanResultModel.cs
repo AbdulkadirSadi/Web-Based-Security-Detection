@@ -9,17 +9,17 @@ namespace SecurityAgent.Models
         [Key]
         public int Id { get; set; }
         
-        public string FilePath { get; set; }
+        public string? FilePath { get; set; }
         
-        public string FileName { get; set; }
+        public string? FileName { get; set; }
         
         public DateTime ScanDate { get; set; }
         
         public bool IsMalicious { get; set; }
         
-        public string DetectedBy { get; set; }
+        public string? DetectedBy { get; set; }
         
-        public string DetectedPatterns { get; set; }
+        public string? DetectedPatterns { get; set; }
         
         // Add ML-specific metrics
         public long FileSize { get; set; }

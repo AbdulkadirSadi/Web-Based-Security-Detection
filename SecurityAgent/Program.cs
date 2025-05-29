@@ -12,17 +12,19 @@ namespace SecurityAgent
 {
     public class Program
     {
-        private static FileSystemWatcher[] _fileWatchers;
-        private static VirusTotalClient _virusTotalClient;
-        private static IOCScanner _iocScanner;
-        private static BackendService _backendService;
-        private static ProcessMonitor _processMonitor;
-        private static Configuration _config;
+        private static FileSystemWatcher[]? _fileWatchers;
+        private static VirusTotalClient? _virusTotalClient;
+        private static IOCScanner? _iocScanner;
+        private static BackendService? _backendService;
+        private static ProcessMonitor? _processMonitor;
+        private static Configuration? _config;
         private static readonly string ConfigFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
         private static bool _isRunning = true;
-        private static string _lastMaliciousFile = null;
-        private static string _lastDetectionInfo = null;
+        private static string? _lastMaliciousFile = null;
+        private static string? _lastDetectionInfo = null;
         private static readonly object _consoleLock = new object(); // Console output synchronization
+        private static Dictionary<string, DateTime> _recentlyScannedFiles = new Dictionary<string, DateTime>();
+        private static readonly TimeSpan _scanCooldown = TimeSpan.FromMinutes(5);
 
         // Write to console with synchronization
         public static void WriteLine(string message)
@@ -84,7 +86,7 @@ namespace SecurityAgent
             commandThread.Start();
             
             // New: Task to poll scan queue
-            Task.Run(() => PollScanQueue());
+            Task _ = Task.Run(() => PollScanQueue());
             
             // Keep the application running
             Console.WriteLine("Security Agent is now running. Type 'help' for available commands.");
@@ -328,8 +330,15 @@ namespace SecurityAgent
                     else
                     {
                         Console.Write("Enter directory path to monitor: ");
-                        string dir = Console.ReadLine();
-                        AddMonitoringDirectory(dir);
+                        string? dir = Console.ReadLine();
+                        if (!string.IsNullOrEmpty(dir))
+                        {
+                            AddMonitoringDirectory(dir);
+                        }
+                        else
+                        {
+                            Console.WriteLine("Invalid directory path.");
+                        }
                     }
                     break;
                     
@@ -341,8 +350,15 @@ namespace SecurityAgent
                     else
                     {
                         Console.Write("Enter directory path to stop monitoring: ");
-                        string removeDir = Console.ReadLine();
-                        RemoveMonitoringDirectory(removeDir);
+                        string? removeDir = Console.ReadLine();
+                         if (!string.IsNullOrEmpty(removeDir))
+                        {
+                            RemoveMonitoringDirectory(removeDir);
+                        }
+                        else
+                        {
+                            Console.WriteLine("Invalid directory path.");
+                        }
                     }
                     break;
                     
@@ -709,6 +725,16 @@ namespace SecurityAgent
         {
             try
             {
+                // Check if file was recently scanned
+                if (_recentlyScannedFiles.TryGetValue(filePath, out DateTime lastScan))
+                {
+                    if (DateTime.Now - lastScan < _scanCooldown)
+                    {
+                        Console.WriteLine($"File {filePath} was recently scanned. Skipping duplicate scan.");
+                        return;
+                    }
+                }
+
                 // Wait a bit to ensure the file is fully written to disk
                 await Task.Delay(1000);
                 
@@ -717,7 +743,17 @@ namespace SecurityAgent
                     Console.WriteLine($"File no longer exists: {filePath}");
                     return;
                 }
-                
+
+                // Update last scan time
+                _recentlyScannedFiles[filePath] = DateTime.Now;
+
+                // Clean up old entries
+                var oldEntries = _recentlyScannedFiles.Where(kvp => DateTime.Now - kvp.Value > _scanCooldown).ToList();
+                foreach (var entry in oldEntries)
+                {
+                    _recentlyScannedFiles.Remove(entry.Key);
+                }
+
                 bool isMalicious = false;
                 int detectionCount = 0;
                 int totalScans = 0;
@@ -731,6 +767,7 @@ namespace SecurityAgent
 
                 // Perform IOC scan
                 var iocResult = _iocScanner.ScanFile(filePath);
+                bool iocMalicious = false;
                 if (iocResult.IsSuspicious)
                 {
                     // Alert about suspicious file with clear warning
@@ -747,7 +784,7 @@ namespace SecurityAgent
                         detectionInfo.AppendLine($"- {pattern}");
                     }
                     
-                    isMalicious = true;
+                    iocMalicious = true;
                     
                     // IOC taraması için detection count ve total scans değerlerini ayarla
                     detectionCount = detectedPatterns.Count;
@@ -773,7 +810,9 @@ namespace SecurityAgent
 
                 // Perform VirusTotal analysis
                 var vtResult = await _virusTotalClient.AnalyzeFile(filePath);
-                if (vtResult.IsMalicious)
+                bool vtMalicious = false;
+                bool fileDeleted = false;
+                if (vtResult != null && vtResult.IsMalicious)
                 {
                     // Alert about malicious file
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -797,7 +836,7 @@ namespace SecurityAgent
                         }
                     }
                     
-                    isMalicious = true;
+                    vtMalicious = true;
                     
                     // Store the malicious file info for potential user action
                     _lastMaliciousFile = filePath;
@@ -817,6 +856,8 @@ namespace SecurityAgent
                             {
                                 NotificationService.ShowMaliciousFileNotification(filePath, detectionInfo.ToString());
                             }
+                            
+                            fileDeleted = true;
                         }
                     }
                     else
@@ -829,14 +870,14 @@ namespace SecurityAgent
                         Console.WriteLine("3. Do nothing (security risk!)");
                     }
                 }
-                else if (!string.IsNullOrEmpty(vtResult.Error))
+                else if (vtResult != null && !string.IsNullOrEmpty(vtResult.Error))
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
                     Console.WriteLine($"VirusTotal analysis error: {vtResult.Error}");
                     Console.ResetColor();
                     Console.WriteLine("Continuing with local IOC scan for suspicious content.");
                 }
-                else
+                else if (vtResult != null)
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"✓ SAFE: File {filePath} appears to be safe according to VirusTotal");
@@ -844,7 +885,10 @@ namespace SecurityAgent
                     Console.WriteLine($"Scanned by {vtResult.TotalScans} antivirus engines, no threats detected");
                 }
 
-                // Send results to backend
+                // Determine final malicious status
+                isMalicious = fileDeleted || vtMalicious || (vtResult != null && !string.IsNullOrEmpty(vtResult.Error) && iocMalicious);
+
+                // Create scan result data once
                 var scanResult = new ScanResultData
                 {
                     FilePath = filePath,
@@ -856,14 +900,65 @@ namespace SecurityAgent
                     DetectedPatterns = detectedPatterns
                 };
 
-                bool sentSuccessfully = await _backendService.SendScanResult(scanResult);
-                if (sentSuccessfully)
+                // Try to save to database first
+                bool dbSaveSuccess = false;
+                try
                 {
-                    Console.WriteLine("Scan results sent to backend successfully.");
+                    LogManager.LogScanResult(filePath, isMalicious, detectionCount, totalScans, detectionInfo.ToString());
+                    dbSaveSuccess = true;
+                    Console.WriteLine("Scan result saved to database successfully.");
                 }
-                else
+                catch (Exception dbEx)
                 {
-                    Console.WriteLine("Failed to send scan results to backend.");
+                    Console.WriteLine($"Error saving to database: {dbEx.Message}");
+                }
+
+                // Only try to send to backend if database save was successful
+                if (dbSaveSuccess)
+                {
+                    int retryCount = 0;
+                    const int maxRetries = 3;
+                    bool sentSuccessfully = false;
+
+                    while (!sentSuccessfully && retryCount < maxRetries)
+                    {
+                        sentSuccessfully = await _backendService.SendScanResult(scanResult);
+                        if (!sentSuccessfully)
+                        {
+                            retryCount++;
+                            if (retryCount < maxRetries)
+                            {
+                                Console.WriteLine($"Retrying to send scan results to backend... Attempt {retryCount + 1} of {maxRetries}");
+                                await Task.Delay(1000 * retryCount); // Exponential backoff
+                            }
+                        }
+                    }
+
+                    if (sentSuccessfully)
+                    {
+                        Console.WriteLine("Scan results sent to backend successfully.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Failed to send scan results to backend after {maxRetries} attempts.");
+                        // Save locally if backend send fails
+                        LogManager.SaveDetailedLog(new LogManager.DetailedScanResult
+                        {
+                            FilePath = filePath,
+                            ScanTime = DateTime.Now,
+                            IsMalicious = isMalicious,
+                            DetectionCount = detectionCount,
+                            TotalScans = totalScans,
+                            FileHash = File.Exists(filePath) ? CalculateFileHash(filePath) : "N/A (file deleted)",
+                            FileSize = new FileInfo(filePath).Length,
+                            FileType = Path.GetExtension(filePath),
+                            DetectedThreats = detectedBy,
+                            ScannerResults = vtResult?.DetectedBy ?? new Dictionary<string, string>(),
+                            Action = isMalicious ? "DELETED" : "SCANNED",
+                            DetectedBy = string.Join(", ", detectedBy),
+                            DetectedPatterns = string.Join(", ", detectedPatterns)
+                        });
+                    }
                 }
                 
                 if (isMalicious)
@@ -872,15 +967,24 @@ namespace SecurityAgent
                     Console.WriteLine("NOTE: This file contains security risks. Use caution!");
                     Console.WriteLine("===============================================================");
                 }
-
-                // Log the scan result
-                LogManager.LogScanResult(filePath, isMalicious, detectionCount, totalScans, detectionInfo.ToString());
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error analyzing file {filePath}: {ex.Message}");
-                LogManager.LogScanResult(filePath, false, 0, 0, $"Error: {ex.Message}");
+                // Only log error if we haven't already saved a result
+                if (!_recentlyScannedFiles.ContainsKey(filePath))
+                {
+                    LogManager.LogScanResult(filePath, false, 0, 0, $"Error: {ex.Message}");
+                }
             }
+        }
+
+        private static string CalculateFileHash(string filePath)
+        {
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            using var stream = File.OpenRead(filePath);
+            var hash = sha256.ComputeHash(stream);
+            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
         }
 
         private static void HandleDeleteMaliciousFile()

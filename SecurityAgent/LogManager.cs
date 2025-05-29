@@ -31,6 +31,12 @@ namespace SecurityAgent
             public string Action { get; set; }
             public string DetectedBy { get; set; }
             public string DetectedPatterns { get; set; }
+            public double EntropyScore { get; set; }
+            public double StringEntropyValue { get; set; }
+            public double ObfuscatedCodeRatio { get; set; }
+            public double ExecutableCodeRatio { get; set; }
+            public double CompressionRatio { get; set; }
+            public double EncryptedSectionRatio { get; set; }
         }
 
         public static void Initialize()
@@ -78,60 +84,62 @@ namespace SecurityAgent
             {
                 string status = isMalicious ? "MALICIOUS" : "CLEAN";
                 
-                // ML metrikleri hesapla
-                var fileAnalyzer = new Services.FileAnalyzer();
-                var scanResult = fileAnalyzer.AnalyzeFile(filePath);
-                
-                // Tarama sonucunu güncelle
-                scanResult.IsMalicious = isMalicious;
-                scanResult.VirusTotalDetectionCount = detectionCount;
-                scanResult.VirusTotalTotalScans = totalScans;
-                
-                // Tespit detaylarını analiz et ve kaydet
-                string detectedBy = "";
-                string detectedPatterns = "";
-                
-                if (isMalicious)
+                // ScanResultModel oluştur
+                var scanResult = new Models.ScanResultModel
                 {
-                    // Basit bir analiz - VirusTotal ya da IOC taramasında tespit edilip edilmediğini kontrol et
-                    if (detectionDetails.Contains("VirusTotal"))
+                    FilePath = filePath,
+                    FileName = Path.GetFileName(filePath),
+                    ScanDate = DateTime.Now,
+                    IsMalicious = isMalicious,
+                    VirusTotalDetectionCount = detectionCount,
+                    VirusTotalTotalScans = totalScans,
+                    DetectedBy = string.Join(", ", ParseDetectionDetails(detectionDetails)),
+                    DetectedPatterns = string.Join(", ", ParseScannerResults(detectionDetails).Select(x => $"{x.Key}: {x.Value}"))
+                };
+
+                // Dosya hala mevcutsa ML metriklerini hesapla
+                if (File.Exists(filePath))
+                {
+                    try
                     {
-                        detectedBy = "VirusTotal";
+                        var fileAnalyzer = new Services.FileAnalyzer();
+                        var fileMetrics = fileAnalyzer.AnalyzeFile(filePath);
                         
-                        // Tespit desenlerini çıkar
-                        var patterns = new List<string>();
-                        var detectionLines = detectionDetails.Split('\n');
-                        foreach (var line in detectionLines)
-                        {
-                            if (line.Contains(":") && !line.Contains("API") && !line.Contains("URL"))
-                            {
-                                patterns.Add(line.Trim());
-                            }
-                        }
-                        
-                        detectedPatterns = string.Join(", ", patterns);
+                        // ML metriklerini kopyala
+                        scanResult.FileSize = fileMetrics.FileSize;
+                        scanResult.EntropyScore = fileMetrics.EntropyScore;
+                        scanResult.HasValidPEHeader = fileMetrics.HasValidPEHeader;
+                        scanResult.SuspiciousAPICount = fileMetrics.SuspiciousAPICount;
+                        scanResult.StringEntropyValue = fileMetrics.StringEntropyValue;
+                        scanResult.SuspiciousStringCount = fileMetrics.SuspiciousStringCount;
+                        scanResult.ObfuscatedCodeRatio = fileMetrics.ObfuscatedCodeRatio;
+                        scanResult.HasValidSignature = fileMetrics.HasValidSignature;
+                        scanResult.ExecutableCodeRatio = fileMetrics.ExecutableCodeRatio;
+                        scanResult.CompressionRatio = fileMetrics.CompressionRatio;
+                        scanResult.EncryptedSectionRatio = fileMetrics.EncryptedSectionRatio;
+
+                        // --- FLOAT/DOUBLE ALANLAR İÇİN KONTROL ---
+                        scanResult.EntropyScore = (double.IsNaN(scanResult.EntropyScore) || double.IsInfinity(scanResult.EntropyScore)) ? 0.0 : scanResult.EntropyScore;
+                        scanResult.StringEntropyValue = (double.IsNaN(scanResult.StringEntropyValue) || double.IsInfinity(scanResult.StringEntropyValue)) ? 0.0 : scanResult.StringEntropyValue;
+                        scanResult.ObfuscatedCodeRatio = (double.IsNaN(scanResult.ObfuscatedCodeRatio) || double.IsInfinity(scanResult.ObfuscatedCodeRatio)) ? 0.0 : scanResult.ObfuscatedCodeRatio;
+                        scanResult.ExecutableCodeRatio = (double.IsNaN(scanResult.ExecutableCodeRatio) || double.IsInfinity(scanResult.ExecutableCodeRatio)) ? 0.0 : scanResult.ExecutableCodeRatio;
+                        scanResult.CompressionRatio = (double.IsNaN(scanResult.CompressionRatio) || double.IsInfinity(scanResult.CompressionRatio)) ? 0.0 : scanResult.CompressionRatio;
+                        scanResult.EncryptedSectionRatio = (double.IsNaN(scanResult.EncryptedSectionRatio) || double.IsInfinity(scanResult.EncryptedSectionRatio)) ? 0.0 : scanResult.EncryptedSectionRatio;
+                        // --- FLOAT/DOUBLE ALANLAR İÇİN KONTROL SONU ---
                     }
-                    else if (detectionDetails.Contains("IOC"))
+                    catch (Exception ex)
                     {
-                        detectedBy = "IOC Scanner";
-                        detectedPatterns = detectionDetails;
-                    }
-                    else
-                    {
-                        detectedBy = "Security Agent";
-                        detectedPatterns = detectionDetails;
+                        Console.WriteLine($"Warning: Could not analyze file for ML metrics: {ex.Message}");
+                        // ML metrikleri olmadan devam et
                     }
                 }
                 
-                scanResult.DetectedBy = detectedBy;
-                scanResult.DetectedPatterns = detectedPatterns;
-                
-                // Tarama sonucunu veritabanına kaydet
+                // Veritabanına kaydet
                 try
                 {
                     using (var dbContext = new ScanResultsContext())
                     {
-                        Console.WriteLine($"Veritabanına kaydediliyor: {scanResult.FileName} (ID: {scanResult.Id})");
+                        Console.WriteLine($"Veritabanına kaydediliyor: {scanResult.FileName}");
                         dbContext.ScanResults.Add(scanResult);
                         var entriesWritten = dbContext.SaveChanges();
                         Console.WriteLine($"Veritabanına başarıyla kaydedildi: {entriesWritten} kayıt");
@@ -139,7 +147,7 @@ namespace SecurityAgent
                 }
                 catch (Exception dbEx)
                 {
-                    Console.WriteLine($"Veritabanı hatası: {dbEx.Message}");
+                    Console.WriteLine($"Error saving to database: {dbEx.Message}");
                     // İç içe exception'ları kontrol et
                     var innerEx = dbEx.InnerException;
                     while (innerEx != null)
@@ -147,26 +155,46 @@ namespace SecurityAgent
                         Console.WriteLine($"İç hata: {innerEx.Message}");
                         innerEx = innerEx.InnerException;
                     }
-                    
-                    // Hata loguna kaydet
-                    File.AppendAllText(
-                        Path.Combine(AppContext.BaseDirectory, "Logs", "db_error_log.txt"),
-                        $"{DateTime.Now}: Database Error - {dbEx.Message}\n{dbEx.StackTrace}\n"
-                    );
+                    throw; // Hatayı yukarı fırlat
                 }
-                
-                // Dosya yolu, durum ve tespit detaylarını loglama
-                File.AppendAllText(
-                    Path.Combine(AppContext.BaseDirectory, "Logs", "scan_results.log"),
-                    $"{DateTime.Now}: {filePath} - {status} - {detectedBy} - {detectionDetails}\n"
-                );
+
+                // Detaylı log kaydı
+                var detailedResult = new DetailedScanResult
+                {
+                    FilePath = filePath,
+                    ScanTime = DateTime.Now,
+                    IsMalicious = isMalicious,
+                    DetectionCount = detectionCount,
+                    TotalScans = totalScans,
+                    FileHash = File.Exists(filePath) ? CalculateFileHash(filePath) : "N/A (file deleted)",
+                    FileSize = scanResult.FileSize,
+                    FileType = Path.GetExtension(filePath),
+                    DetectedThreats = ParseDetectionDetails(detectionDetails),
+                    ScannerResults = ParseScannerResults(detectionDetails),
+                    Action = isMalicious ? "DELETED" : "SCANNED",
+                    DetectedBy = scanResult.DetectedBy,
+                    DetectedPatterns = scanResult.DetectedPatterns,
+                    EntropyScore = scanResult.EntropyScore,
+                    StringEntropyValue = scanResult.StringEntropyValue,
+                    ObfuscatedCodeRatio = scanResult.ObfuscatedCodeRatio,
+                    ExecutableCodeRatio = scanResult.ExecutableCodeRatio,
+                    CompressionRatio = scanResult.CompressionRatio,
+                    EncryptedSectionRatio = scanResult.EncryptedSectionRatio
+                };
+
+                SaveDetailedLog(detailedResult);
+
+                // İstatistikleri güncelle
+                string key = isMalicious ? "Malicious" : "Clean";
+                if (!ScanStatistics.ContainsKey(key))
+                    ScanStatistics[key] = 0;
+                ScanStatistics[key]++;
+                SaveStatistics();
             }
             catch (Exception ex)
             {
-                File.AppendAllText(
-                    Path.Combine(AppContext.BaseDirectory, "Logs", "error_log.txt"),
-                    $"{DateTime.Now}: Log Error - {ex.Message}\n{ex.StackTrace}\n"
-                );
+                Console.WriteLine($"Error in LogScanResult: {ex.Message}");
+                throw; // Hatayı yukarı fırlat
             }
         }
 
@@ -232,7 +260,7 @@ namespace SecurityAgent
             return results;
         }
 
-        private static void SaveDetailedLog(DetailedScanResult result)
+        public static void SaveDetailedLog(DetailedScanResult result)
         {
             try
             {

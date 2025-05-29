@@ -35,4 +35,8 @@ WHERE FilePath IS NOT NULL;
 
 -- Add indexes for ML performance
 CREATE INDEX IX_ScanResultModels_EntropyScore ON dbo.ScanResultModels (EntropyScore);
-CREATE INDEX IX_ScanResultModels_IsMalicious ON dbo.ScanResultModels (IsMalicious); 
+CREATE INDEX IX_ScanResultModels_IsMalicious ON dbo.ScanResultModels (IsMalicious);
+
+-- Update the size of the DetectedBy column in ScanResultsML table
+ALTER TABLE dbo.ScanResultsML
+ALTER COLUMN DetectedBy NVARCHAR(MAX) NULL; 
