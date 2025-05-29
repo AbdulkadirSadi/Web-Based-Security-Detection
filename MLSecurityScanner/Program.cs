@@ -13,7 +13,7 @@ namespace MLSecurityScanner
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("ML.NET tabanlı Zararlı Yazılım Tespit Modülü");
+            Console.WriteLine("ML.NET Tabanlı Zararlı Yazılım Tespit Modülü");
             Console.WriteLine("===========================================");
 
             // Yapılandırma dosyasını yükle
@@ -75,13 +75,12 @@ namespace MLSecurityScanner
             {
                 Console.WriteLine("\nNe yapmak istiyorsunuz?");
                 Console.WriteLine("1) Sentetik veri üret ve veritabanına kaydet");
-                Console.WriteLine("2) Güvenlik Ajanı tarama sonuçlarını içe aktar");
-                Console.WriteLine("3) Modeli eğit");
-                Console.WriteLine("4) Dosya analiz et ve tahmin yap");
-                Console.WriteLine("5) Modeli değerlendir");
-                Console.WriteLine("6) ScanResults tablosunu temizle");
-                Console.WriteLine("7) Çıkış");
-                Console.Write("\nSeçiminiz (1-7): ");
+                Console.WriteLine("2) Modeli eğit");
+                Console.WriteLine("3) Dosya analiz et ve tahmin yap");
+                Console.WriteLine("4) Modeli değerlendir");
+                Console.WriteLine("5) ScanResults tablosunu temizle");
+                Console.WriteLine("6) Çıkış");
+                Console.Write("\nSeçiminiz (1-6): ");
 
                 if (!int.TryParse(Console.ReadLine(), out int choice))
                 {
@@ -95,25 +94,22 @@ namespace MLSecurityScanner
                         GenerateSyntheticData(dbContext);
                         break;
                     case 2:
-                        ImportScanResults(dbContext, configuration);
-                        break;
-                    case 3:
                         TrainModel(dbContext);
                         break;
-                    case 4:
+                    case 3:
                         AnalyzeFile(dbContext);
                         break;
-                    case 5:
+                    case 4:
                         EvaluateModel(dbContext);
                         break;
-                    case 6:
+                    case 5:
                         TruncateScanResults(dbContext);
                         break;
-                    case 7:
+                    case 6:
                         Console.WriteLine("Programdan çıkılıyor...");
                         return;
                     default:
-                        Console.WriteLine("Geçersiz seçim. Lütfen 1-7 arası bir sayı girin.");
+                        Console.WriteLine("Geçersiz seçim. Lütfen 1-6 arası bir sayı girin.");
                         break;
                 }
             }
@@ -127,10 +123,7 @@ namespace MLSecurityScanner
                     int count = args.Length > 1 && int.TryParse(args[1], out int c) ? c : 1000;
                     GenerateSyntheticData(dbContext, count);
                     break;
-                case "import":
-                    int days = args.Length > 1 && int.TryParse(args[1], out int d) ? d : 30;
-                    ImportScanResults(dbContext, configuration, days);
-                    break;
+                
                 case "train":
                     TrainModel(dbContext);
                     break;
@@ -154,7 +147,6 @@ namespace MLSecurityScanner
                 default:
                     Console.WriteLine("Bilinmeyen komut. Kullanım:");
                     Console.WriteLine("  generate [sayi] - Sentetik veri üret");
-                    Console.WriteLine("  import [günSayısı] - Güvenlik Ajanı tarama sonuçlarını içe aktar");
                     Console.WriteLine("  train - Modeli eğit");
                     Console.WriteLine("  analyze <dosya_yolu> - Dosyayı analiz et");
                     Console.WriteLine("  evaluate - Modelin performansını değerlendir");
@@ -181,37 +173,7 @@ namespace MLSecurityScanner
             Console.WriteLine($"{savedCount} kayıt veritabanına eklendi.");
         }
         
-        private static void ImportScanResults(MalwareDbContext dbContext, IConfiguration configuration, int days = 30)
-        {
-            Console.WriteLine($"Son {days} günün tarama sonuçları içe aktarılıyor...");
-            
-            var importer = new ScanResultImporter(configuration);
-            var importedResults = importer.ImportRecentScanResults(days);
-            
-            if (importedResults.Count == 0)
-            {
-                Console.WriteLine("İçe aktarılacak sonuç bulunamadı.");
-                return;
-            }
-            
-            // Önce veritabanındaki mevcut Id'leri al
-            var existingIds = dbContext.ScanResults.Select(r => r.Id).ToHashSet();
-            
-            // Sadece veritabanında olmayan kayıtları ekle
-            var newResults = importedResults.Where(r => !existingIds.Contains(r.Id)).ToList();
-            
-            if (newResults.Count == 0)
-            {
-                Console.WriteLine("Tüm kayıtlar zaten veritabanında mevcut.");
-                return;
-            }
-            
-            // Verileri veritabanına kaydet
-            dbContext.ScanResults.AddRange(newResults);
-            int savedCount = dbContext.SaveChanges();
-            
-            Console.WriteLine($"{savedCount} yeni kayıt ScanResults tablosuna eklendi.");
-        }
+        
 
         private static void TrainModel(MalwareDbContext dbContext)
         {
